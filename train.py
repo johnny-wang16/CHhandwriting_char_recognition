@@ -13,12 +13,15 @@ from torch.utils.data import Subset
 from torch.utils.data import Dataset
 import os
 import pdb
-import natsort
 from PIL import Image
 import argparse
 import csv
 from sklearn.model_selection import train_test_split
 import torch.nn.functional as F
+import numpy as np
+
+from custom_model import ResNet, BasicBlock
+
 parser = argparse.ArgumentParser(description='PyTorch  Training')
 parser.add_argument('--test', dest='test', action='store_true',
                     help='test model on final test set')
@@ -66,105 +69,6 @@ def conv3x3(in_planes, out_planes, stride=1):
                      padding=1, bias=False)
 
 
-class BasicBlock(nn.Module):
-    expansion = 1
-
-    def __init__(self, inplanes, planes, stride=1, downsample=None):
-        super(BasicBlock, self).__init__()
-        self.conv1 = conv3x3(inplanes, planes, stride)
-        self.bn1 = nn.BatchNorm2d(planes)
-        self.relu = nn.ReLU(inplace=True)
-        self.conv2 = conv3x3(planes, planes)
-        self.bn2 = nn.BatchNorm2d(planes)
-        self.downsample = downsample
-        self.stride = stride
-
-    def forward(self, x):
-        residual = x
-
-        out = self.conv1(x)
-        out = self.bn1(out)
-        out = self.relu(out)
-
-        out = self.conv2(out)
-        out = self.bn2(out)
-
-        if self.downsample is not None:
-            residual = self.downsample(x)
-
-        out += residual
-        out = self.relu(out)
-
-        return out
-
-
-class ResNet(nn.Module):
-
-    def __init__(self, block, layers, num_classes, grayscale):
-        self.inplanes = 64
-        if grayscale:
-            in_dim = 1
-        else:
-            in_dim = 3
-        super(ResNet, self).__init__()
-        self.conv1 = nn.Conv2d(in_dim, 64, kernel_size=7, stride=2, padding=3,
-                               bias=False)
-        self.bn1 = nn.BatchNorm2d(64)
-        self.relu = nn.ReLU(inplace=True)
-        self.maxpool = nn.MaxPool2d(kernel_size=3, stride=2, padding=1)
-        self.layer1 = self._make_layer(block, 64, layers[0])
-        self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
-        self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
-        self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.avgpool = nn.AvgPool2d(7, stride=1)
-        self.fc = nn.Linear(8192, num_classes)
-
-        for m in self.modules():
-            if isinstance(m, nn.Conv2d):
-                n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, (2. / n)**.5)
-            elif isinstance(m, nn.BatchNorm2d):
-                m.weight.data.fill_(1)
-                m.bias.data.zero_()
-
-    def _make_layer(self, block, planes, blocks, stride=1):
-        downsample = None
-        if stride != 1 or self.inplanes != planes * block.expansion:
-            downsample = nn.Sequential(
-                nn.Conv2d(self.inplanes, planes * block.expansion,
-                          kernel_size=1, stride=stride, bias=False),
-                nn.BatchNorm2d(planes * block.expansion),
-            )
-
-        layers = []
-        layers.append(block(self.inplanes, planes, stride, downsample))
-        self.inplanes = planes * block.expansion
-        for i in range(1, blocks):
-            layers.append(block(self.inplanes, planes))
-
-        return nn.Sequential(*layers)
-
-    def forward(self, x):
-        x = self.conv1(x)
-        x = self.bn1(x)
-        x = self.relu(x)
-        x = self.maxpool(x)
-
-        x = self.layer1(x)
-        x = self.layer2(x)
-        x = self.layer3(x)
-        x = self.layer4(x)
-        # because MNIST is already 1x1 here:
-        # disable avg pooling
-        #x = self.avgpool(x)
-        
-        x = x.view(x.size(0), -1)
-        logits = self.fc(x)
-        probas = F.softmax(logits, dim=1)
-        return logits, probas
-
-
-
 def resnet18(num_classes):
     """Constructs a ResNet-18 model."""
     model = ResNet(block=BasicBlock, 
@@ -173,12 +77,6 @@ def resnet18(num_classes):
                    grayscale=True)
     return model
 
-# def listtocsv(csv_lst, file_name):
-#     print("saving to " + file_name)
-#     with open(file_name, mode='w') as cls_file:
-#         cls_writer = csv.writer(cls_file, delimiter=',')
-#         cls_writer.writerow(csv_lst)
-#     print("finished saving to " + file_name)
 
 def train_val_dataset(dataset, val_split=0.10):
     train_idx, val_idx = train_test_split(list(range(len(dataset))), test_size=val_split)
@@ -239,27 +137,12 @@ def main():
     torch.manual_seed(0)
     global args
     args = parser.parse_args()
-    # model = models.__dict__["resnet18"](pretrained=False)
-
-    # # for param in model.parameters():
-    # #     param.requires_grad = False
-    # model.fc = nn.Sequential(nn.Linear(13065, 13065),
-    #                                  nn.LogSoftmax(dim=1))
     model = resnet18(13065)
 
-    # pdb.set_trace()
-    # model.fc = nn.Sequential(nn.Linear(512, 128),
-    #                                  nn.ReLU(),
-    #                                  nn.Linear(128, 20),
-    #                                  nn.LogSoftmax(dim=1))
-    # model.fc = nn.Linear(512, 20)
-
     train_dir = "/home/jwang/handwriting_data_all/cleaned_data"
-    # val_dir = "/home/jwang/ming/20_categories_training/20_categories_trainingn"
+    model = torch.nn.DataParallel(model).cuda()
     model.train()
     #Applying Transformation
-    # normalize = transforms.Normalize(mean=[0.8693],
-    #                                      std=[0.3])
     train_transforms = transforms.Compose([
                                     transforms.Resize(100),
                                     transforms.Grayscale(num_output_channels=1),
@@ -271,14 +154,12 @@ def main():
                                     ])
 
     val_transforms = transforms.Compose([                                    
-    	                            transforms.Resize(100),
+                                    transforms.Resize(100),
                                     transforms.Grayscale(num_output_channels=1),
                                     transforms.ToTensor(),
                                     ])
 
-    # dataset_original = datasets.ImageFolder(train_dir, train_transforms)
     dataset_original = datasets.ImageFolder(train_dir)
-
     train_val_dict = train_val_dataset(dataset_original)
     trainsubset= train_val_dict["train"]
     valsubset = train_val_dict["val"]
@@ -286,10 +167,15 @@ def main():
     trainset = DatasetFromSubset(trainsubset, train_transforms)
     valset = DatasetFromSubset(valsubset, val_transforms)
 
+    # train_debug_set = Subset(trainset, torch.arange(1000))
+    # trainset= train_debug_set
+    # val_debug_set = Subset(valset, torch.arange(1000))
+    # valset =val_debug_set
 
     #Data Loading
-    train_loader = torch.utils.data.DataLoader(trainset, batch_size=3, shuffle=True)
-    val_loader = torch.utils.data.DataLoader(valset, batch_size=3)
+    train_loader = torch.utils.data.DataLoader(trainset, batch_size=100, shuffle=True)
+    val_loader = torch.utils.data.DataLoader(valset, batch_size=100)
+
     #debug: Check dataset transformations >
     # from torchvision.utils import save_image
     # iterator = iter(train_loader)
@@ -299,7 +185,7 @@ def main():
     # pdb.set_trace()
     #debug: Check dataset transformations <
 
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.CrossEntropyLoss().cuda()
 
     optimizer = torch.optim.SGD(model.parameters(), 0.01,
                                 momentum=0.9,
@@ -327,7 +213,7 @@ def main():
 
     elif (not args.all_train) and (not args.evaluate) and (not args.test):
         print("!!!!!!!!!!!!!!!!!normal train !!!!!!!!!!!!!!!!!!!")
-        total_epoch = 120
+        total_epoch = 6
         model_sr_out_path = "/home/jwang/CHhandwriting_char_recognition/" + "model_cls.pth"
         for epoch in range(0, total_epoch):
             print("===============epoch:{} ==================".format(epoch))
@@ -351,7 +237,7 @@ def main():
 
     elif args.all_train:
         print("!!!!!!!!!!!!!all train!!!!!!!!!!!!!!!!!")
-        total_epoch = 60
+        total_epoch = 30
         model_out_path = "/home/jwang/ming/" + "all_train_model_cls.pth"
         for epoch in range(0, total_epoch):
             adjust_learning_rate(optimizer, 0.01, epoch, total_epoch)
@@ -359,10 +245,8 @@ def main():
             # train for one epoch
             top1 = train(all_train_loader, model, criterion, optimizer, epoch)
             print("train top1:", top1)
-
             # top1 = validate(val_loader, model, criterion)
             # print(" val top1:", top1)
-
         torch.save(model, model_out_path)
 
 
@@ -387,27 +271,14 @@ def train(train_loader, model, criterion, optimizer, epoch):
     train_losses, test_losses = [], []
     for i, (images, target) in enumerate(train_loader):
         # measure data loading time
+        images = images.cuda()
+        target = target.cuda()
         data_time.update(time.time() - end)
 
-
-        # compute output
-#         print("images shape: ", images.shape)
-#         print("targets shape: ", target.shape)
         output, __ = model(images)
 
-        # if i == 1:
-        #     pdb.set_trace()
-
-        # print("output: ", output)
         loss = criterion(output, target)
-        # print("outpt prob: ", output)
-        # print("output prob shape: ", output.shape)
-        # print("    target: ", target)
-        # print("      loss: ", loss.item())
-
-        # pdb.set_trace()
-#         print(target.numpy())
-        
+     
 
         # measure accuracy and record loss
         acc1 = accuracy(output, target, topk=(1,))
@@ -424,8 +295,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
         batch_time.update(time.time() - end)
         end = time.time()
 
-
-        if i % 200 == 0:
+        if i % 100 == 0:
             print("top1 acc: ", top1.avg.cpu().data.numpy())
             print("train loss: ", losses.avg)
             
@@ -441,12 +311,13 @@ def validate(val_loader, model, criterion):
     # switch to evaluate mode
     model.eval()
 
-
     with torch.no_grad():
         end = time.time()
         for i, (images, target) in enumerate(val_loader):
             # compute output
-            output = model(images)
+            images = images.cuda()
+            target = target.cuda()
+            output, __ = model(images)
             loss = criterion(output, target)
 
             # measure accuracy and record loss
@@ -464,49 +335,9 @@ def validate(val_loader, model, criterion):
                 print("val top1 acc: ", top1.avg.cpu().data.numpy())
                 print("val loss: ", loss.item())
 
-        # TODO: this should also be done with the ProgressMeter
-#         print(' * Acc@1 {top1.avg:.3f} Acc@5 {top5.avg:.3f}'
-#               .format(top1=top1, top5=top5))
     print("val accuracy: ", top1.avg)
 
     return top1.avg, losses.avg
 
-# def final_test(val_loader, model):
-#     prediction_list = [-1 for i in range(716)]
-
-
-#     # switch to evaluate mode
-#     model.eval()
-
-#     with torch.no_grad():
-#         end = time.time()
-#         for i, (images, index) in enumerate(val_loader):
-#             # compute output
-#             output = model(images)
-#             __, pred= output.topk(1, 1, True, True)
-#             prediction_list[index] = pred.item()
-
-#             # measure accuracy and record loss
-#             # acc1, acc5 = accuracy(output, target, topk=(1, 5))
-
-# #             top5.update(acc5[0], images.size(0))
-
-#     return prediction_list
-
-#  class CustomDataSet(Dataset):
-#     def __init__(self, main_dir, transform):
-#         self.main_dir = main_dir
-#         self.transform = transform
-#         all_imgs = os.listdir(main_dir)
-#         self.total_imgs = natsort.natsorted(all_imgs)
-
-#     def __len__(self):
-#         return len(self.total_imgs)
-
-#     def __getitem__(self, idx):
-#         img_loc = os.path.join(self.main_dir, self.total_imgs[idx])
-#         image = Image.open(img_loc).convert("RGB")
-#         tensor_image = self.transform(image)
-#         return tensor_image, idx
 if __name__ == "__main__":
     main()
