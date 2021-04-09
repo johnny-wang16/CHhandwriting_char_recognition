@@ -21,14 +21,19 @@ import torch.nn.functional as F
 import numpy as np
 
 from custom_model import ResNet, BasicBlock
-
+import cv2
+from PIL import Image
 parser = argparse.ArgumentParser(description='PyTorch  Training')
 parser.add_argument('--test', dest='test', action='store_true',
                     help='test model on final test set')
 parser.add_argument('--evaluate', dest='evaluate', action='store_true',
                     help='evaluate model on validation set')
+parser.add_argument('--train', dest='train', action='store_true',
+                    help='normal train')
 parser.add_argument('--all-train', dest='all_train', action='store_true',
                     help='evaluate model on validation set')
+parser.add_argument('--single-evaluate', dest='single_evaluate', action='store_true',
+                    help='evaluate one image')
 
 
 class AverageMeter(object):
@@ -211,7 +216,7 @@ def main():
         print(" val top1: ", top1)
 
 
-    elif (not args.all_train) and (not args.evaluate) and (not args.test):
+    elif args.train:
         print("!!!!!!!!!!!!!!!!!normal train !!!!!!!!!!!!!!!!!!!")
         total_epoch = 6
         model_sr_out_path = "/home/jwang/CHhandwriting_char_recognition/" + "model_cls.pth"
@@ -248,6 +253,17 @@ def main():
             # top1 = validate(val_loader, model, criterion)
             # print(" val top1:", top1)
         torch.save(model, model_out_path)
+
+    elif args.single_evaluate:
+        image = cv2.imread("example_0.png")
+        image = val_transforms(Image.fromarray(image))
+        image = torch.unsqueeze(image, 0)
+        model.train()
+        model = load_model("/home/jwang/CHhandwriting_char_recognition/0403_trained/model_cls.pth", model)
+        model.eval()
+
+        pred = single_evaluate(image, model)
+        print("class: ", pred)
 
 
 def train_val_dataset(dataset, val_split=0.10):
@@ -338,6 +354,17 @@ def validate(val_loader, model, criterion):
     print("val accuracy: ", top1.avg)
 
     return top1.avg, losses.avg
+
+def single_evaluate(image, model):
+    model.eval()
+
+    with torch.no_grad():
+        image = image.cuda()
+        output, __ = model(image)
+        pred = np.argmax(output.cpu().numpy())
+        print("class: ", pred)
+
+    return pred
 
 if __name__ == "__main__":
     main()
