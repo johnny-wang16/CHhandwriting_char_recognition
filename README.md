@@ -9,3 +9,9 @@ train.py: main file that contains DNN code
 
 document2chars.ipynb: main file that contains code to process document images to extract useful information.
 
+
+## Usage:
+- To train the model from scratch, run: `python train.py --train`
+- To evaluate the model on the validation set, run: `python train.py --evaluate`
+- To evaluate a single image, modify the code to read in the image and run: `python train.py --single-evaluate`
+
