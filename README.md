@@ -6,5 +6,6 @@ The model can be downloaded from this [google drive link](https://drive.google.c
 ## File explanation:
 
 train.py: main file that contains DNN code
+
 document2chars.ipynb: main file that contains code to process document images to extract useful information.
 
